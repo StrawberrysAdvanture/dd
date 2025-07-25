@@ -1,0 +1,14 @@
+accelerate launch /workspace/project/DiffSynth-Studio/examples/wanvideo/model_training/train.py \
+  --dataset_base_path /workspace/project/DiffSynth-Studio/example_video_dataset \
+  --dataset_metadata_path /workspace/project/DiffSynth-Studio/example_video_dataset/metadata.csv\
+  --height 480 \
+  --width 320 \
+  --dataset_repeat 15\
+  --model_paths '["/workspace/project/wan_models/Wan2.1-T2V-1.3B/diffusion_pytorch_model.safetensors","/workspace/project/wan_models/Wan2.1-T2V-1.3B/models_t5_umt5-xxl-enc-bf16.pth","/workspace/project/wan_models/Wan2.1-T2V-1.3B/Wan2.1_VAE.pth"]' \
+  --learning_rate 1e-4 \
+  --num_epochs 5 \
+  --remove_prefix_in_ckpt "pipe.dit." \
+  --output_path "./models/train/Wan2.1-T2V-1.3B_lora" \
+  --lora_base_model "dit" \
+  --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
+  --lora_rank 32
