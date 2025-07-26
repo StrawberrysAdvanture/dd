@@ -1,5 +1,7 @@
-Here are the files I modified for the flow GRPO: DiffSynth-Studio/diffsynth/pipelines/wan_video_new.py \n
-DiffSynth-Studio/examples/wanvideo/model_training/train.py \n and 
+Here are the files I modified for the flow GRPO: DiffSynth-Studio/diffsynth/pipelines/wan_video_new.py
+
+DiffSynth-Studio/examples/wanvideo/model_training/train.py and 
+
 DiffSynth-Studio/examples/wanvideo/model_training/lora/Wan2.1-T2V-1.3B.sh
 
 Functions modified are marked with ###########################################################################
