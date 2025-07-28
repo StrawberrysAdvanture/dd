@@ -223,7 +223,7 @@ class WanVideoPipeline(BasePipeline):
             device=device, torch_dtype=torch_dtype,
             height_division_factor=16, width_division_factor=16, time_division_factor=4, time_division_remainder=1
         )
-        self.scheduler = FlowMatchScheduler(num_inference_steps=50,shift=5, sigma_min=0.0, extra_one_step=True)
+        self.scheduler = FlowMatchScheduler(num_inference_steps=250,shift=5, sigma_min=0.0, extra_one_step=True)
         self.prompter = WanPrompter(tokenizer_path=tokenizer_path)
         self.text_encoder: WanTextEncoder = None
         self.image_encoder: WanImageEncoder = None
@@ -231,8 +231,7 @@ class WanVideoPipeline(BasePipeline):
         self.vae: WanVideoVAE = None
         self.motion_controller: WanMotionControllerModel = None
         self.vace: VaceWanModel = None
-        #self.in_iteration_models = ("dit", "motion_controller", "vace")
-        self.in_iteration_models = ("dit",)
+        self.in_iteration_models = ("dit", "motion_controller", "vace")
         self.unit_runner = PipelineUnitRunner()
         self.units = [
             WanVideoUnit_ShapeChecker(),
@@ -259,7 +258,7 @@ class WanVideoPipeline(BasePipeline):
 
         
     def training_loss(self, **inputs):
-        timestep_id = torch.randint(0, 50, (1,)) ####################################################################huge change
+        timestep_id = torch.randint(0, 250, (1,))###################
         timestep = self.scheduler.timesteps[timestep_id].to(dtype=self.torch_dtype, device=self.device)
         
         inputs["latents"] = self.scheduler.add_noise(inputs["input_latents"], inputs["noise"], timestep)
@@ -272,7 +271,9 @@ class WanVideoPipeline(BasePipeline):
         return loss
         
     #####################################################################################################
-    def generate_vid(self, prompt, num_frames = 16, height=480, width=320, seed = None):
+    
+    def sample_video_with_logprob(self, prompt: str, num_frames=16, height=480, width=320, seed=None):
+        # === 1. Generate video
         result = self(
             prompt=prompt,
             height=height,
@@ -281,22 +282,33 @@ class WanVideoPipeline(BasePipeline):
             cfg_scale=1.0,
             seed=seed
         )
-        return result
-
-
-    def sample_video_with_logprob(self, inputs):
+        
+        video = result
+        transform = T.ToTensor()
+        video_tensor = torch.stack([TF.to_tensor(frame) for frame in video])  # (C, T, H, W)
+        video_tensor = video_tensor.permute(1, 0, 2, 3).unsqueeze(0)
+        video_tensor = video_tensor.to(dtype=torch.bfloat16, device=self.device) 
+        # === 2. Approximate log prob using negative loss ===
         models = {name: getattr(self, name) for name in self.in_iteration_models}
-        '''
+        latent = self.vae.encode(video_tensor, device = self.device)
+        inputs = {
+            "input_video": video,
+            "input_latents":latent,
+            "prompt": prompt,
+            "height": height,
+            "width": width,
+            "num_frames": num_frames,
+        }
+            
         try:
             loss = self.training_loss(**models, **inputs)
         except Exception as e:
             print(f"[FlowGRPO] Loss evaluation failed: {e}")
             loss = torch.tensor(5.0, device=self.device)
-        '''
-        loss = self.training_loss(**models, **inputs)
+        
         log_prob = -loss
         
-        return log_prob
+        return video, log_prob
     
     ######################################################################################################
     
@@ -504,9 +516,6 @@ class WanVideoPipeline(BasePipeline):
         
         # Load models
         pipe.text_encoder = model_manager.fetch_model("wan_video_text_encoder")
-        print('###################################################')
-        print("text_encoder:", type(pipe.text_encoder))
-        print('#########################################################################################')
         pipe.dit = model_manager.fetch_model("wan_video_dit")
         pipe.vae = model_manager.fetch_model("wan_video_vae")
         pipe.image_encoder = model_manager.fetch_model("wan_video_image_encoder")
@@ -559,7 +568,7 @@ class WanVideoPipeline(BasePipeline):
         cfg_scale: Optional[float] = 5.0,
         cfg_merge: Optional[bool] = False,
         # Scheduler
-        num_inference_steps: Optional[int] = 50, #Change made here
+        num_inference_steps: Optional[int] = 250, #Change made here
         sigma_shift: Optional[float] = 5.0,
         # Speed control
         motion_bucket_id: Optional[int] = None,
@@ -759,9 +768,7 @@ class WanVideoUnit_PromptEmbedder(PipelineUnit):
     def process(self, pipe: WanVideoPipeline, prompt, positive) -> dict:
         pipe.load_models_to_device(self.onload_model_names)
         prompt_emb = pipe.prompter.encode_prompt(prompt, positive=positive, device=pipe.device)
-        print()
-        print('**********************************************')
-        print(type(prompt_emb))
+        
         return {"context": prompt_emb}
 
 

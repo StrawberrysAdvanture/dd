@@ -49,7 +49,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         self.pipe = WanVideoPipeline.from_pretrained(torch_dtype=torch.bfloat16, device="cpu", model_configs=model_configs)
         
         # Reset training scheduler
-        self.pipe.scheduler.set_timesteps(50, training=True) #######################################################################################################
+        self.pipe.scheduler.set_timesteps(1000, training=True)
         
         # Freeze untrainable models
         self.pipe.freeze_except([] if trainable_models is None else trainable_models.split(","))
@@ -77,7 +77,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         video_tensor = torch.stack([TF.to_tensor(frame) for frame in video])  # (C, T, H, W)
         video_tensor = video_tensor.permute(1, 0, 2, 3).unsqueeze(0)
         video_tensor = video_tensor.to(dtype=torch.bfloat16, device=self.pipe.device)
-        i_latent = self.pipe.vae.encode(video_tensor, device = self.pipe.device)
+        latent = self.pipe.vae.encode(video_tensor, device = self.pipe.device)
         # CFG-unsensitive parameters
         inputs_shared = {
             # Assume you are using this pipeline for inference,
@@ -95,7 +95,7 @@ class WanTrainingModule(DiffusionTrainingModule):
             "use_gradient_checkpointing_offload": self.use_gradient_checkpointing_offload,
             "cfg_merge": False,
             "vace_scale": 1,
-            "input_latents" : i_latent  ##########################################################################added input latents here
+            "input_latents" : latent  ##########################################################################added input latents here
         }
         
         # Extra inputs
@@ -132,28 +132,29 @@ class WanTrainingModule(DiffusionTrainingModule):
 
         rewards = []
         log_probs = []
+        losses = []
 
         for seed in seeds:
             # 1. Sample video and get log_prob (-loss)
-            #inputs_j = self.forward_preprocess({"prompt": prompt, "video": video})
-            #for k, v in inputs_j.items():
-             #   print(f'the in dex is {k}')
-              #  print('mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm')
-            video = self.pipe.generate_vid(
+            video, log_prob = self.pipe.sample_video_with_logprob(
                 prompt=prompt,
                 height=480,
                 width=832,
                 num_frames=81,
                 seed=seed,
             )
-            input_j = self.forward_preprocess({"prompt": prompt, "video": video})
-            log_prob = self.pipe.sample_video_with_logprob(input_j)
+
             # 2. Compute OCR reward
             ocr_reward = compute_ocr_reward(video, target_text)
             total_reward = alpha * ocr_reward + beta * log_prob.item()
+            # 3. Re-evaluate training loss on this video
+            models = {name: getattr(self.pipe, name) for name in self.pipe.in_iteration_models}
+            inputs_i = self.forward_preprocess({"prompt": prompt, "video": video})
+            loss_i = self.pipe.training_loss(**models, **inputs_i)
             log_probs.append(log_prob)
 
             rewards.append(total_reward)
+            losses.append(loss_i)
 
         # 4. Compute GRPO-weighted loss
         #rewards_tensor = torch.tensor(rewards, device=losses[0].device)
@@ -161,17 +162,17 @@ class WanTrainingModule(DiffusionTrainingModule):
         #loss_tensor = torch.stack(losses)
         #final_loss = torch.sum(weights * loss_tensor)
         
-        rewards_tensor = torch.tensor(rewards, device=log_probs[0].device)
-        advantages = (rewards_tensor - rewards_tensor.mean()) / (rewards_tensor.std() + 1e-8)
+        rewards_tensor = torch.tensor(rewards, device=losses[0].device)
+    	advantages = (rewards_tensor - rewards_tensor.mean()) / (rewards_tensor.std() + 1e-8)
 
     	# === Step 2: GRPO-style clipped surrogate objective ===
-        log_probs_tensor = torch.stack(log_probs)
-        log_probs_old = log_probs_tensor.detach()  # Freeze old policy
-        clip_eps = 0.2
+    	log_probs_tensor = torch.stack(log_probs)
+    	log_probs_old = log_probs_tensor.detach()  # Freeze old policy
 
-        ratios = torch.exp(log_probs_tensor - log_probs_old)  # Should be ~1.0 if stable
-        clipped_ratios = torch.clamp(ratios, 1 - clip_eps, 1 + clip_eps)
-        policy_loss = -torch.mean(torch.min(ratios * advantages, clipped_ratios * advantages))
+    	ratios = torch.exp(log_probs_tensor - log_probs_old)  # Should be ~1.0 if stable
+    	clipped_ratios = torch.clamp(ratios, 1 - clip_eps, 1 + clip_eps)
+    
+    	policy_loss = -torch.mean(torch.min(ratios * advantages, clipped_ratios * advantages))
 
         return policy_loss
 
