@@ -9,3 +9,8 @@ Functions modified are marked with #############################################
 Right now it is just a messy repo and I am working on putting everything together.
 
 updates: Done with debugging. Environment file has been uploaded
+
+Important!!! Current environment is not compatible with Python12. Python10 is recommended
+
+Please download Torch 2.60 + cuda 12.4. This is not included in the requirements.txt file
+
